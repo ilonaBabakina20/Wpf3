@@ -1,0 +1,12 @@
+namespace WpfApp3
+{
+    public class Order
+    {
+        public int Id { get; set; }
+        public string ClientName { get; set; }
+        public string Car { get; set; }
+        public string Status { get; set; }
+        public decimal Total { get; set; }
+        public string Date { get; set; }
+    }
+}
