@@ -1,0 +1,10 @@
+namespace WpfApp3
+{
+    public class Client
+    {
+        public string FullName { get; set; }
+        public string Phone { get; set; }
+        public string Email { get; set; }
+        public int CarCount { get; set; }
+    }
+}
