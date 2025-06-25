@@ -1,0 +1,14 @@
+namespace WpfApp3
+{
+    public class ChartData
+    {
+        public string Category { get; set; }
+        public decimal Value { get; set; }
+    }
+
+    public class InventoryChartData
+    {
+        public string ItemName { get; set; }
+        public int Quantity { get; set; }
+    }
+}
