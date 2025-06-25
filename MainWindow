@@ -1,0 +1,601 @@
+using System.Windows;
+using System.Windows.Controls;
+using Microsoft.Data.Sqlite;
+using System.Collections.Generic;
+using System.Windows.Input;
+using System.Linq;
+
+namespace WpfApp3
+{
+    public partial class MainWindow : Window
+    {
+        private string connectionString = "Data Source=new.db;";
+        private ReportsData reportsData;
+        private ReportsViewModel reportsVM;
+        public MainWindow(UserRole role)
+        {
+            InitializeComponent();
+            this.Title += $" - {role.ToString()}";
+            
+            reportsData = new ReportsData();
+            DataContext = reportsData;
+            
+            reportsVM = new ReportsViewModel();
+            DataContext = reportsVM;
+            
+            StartDatePicker.SelectedDate = DateTime.Today.AddMonths(-1);
+            EndDatePicker.SelectedDate = DateTime.Today;
+
+            InitializeSearchFunctionality();
+
+            if (role == UserRole.Master)
+            {
+                foreach (TabItem tab in MainTabControl.Items)
+                {
+                    if (tab.Header.ToString() == "Клиенты" || tab.Header.ToString() == "Отчеты")
+                    {
+                        tab.Visibility = Visibility.Collapsed;
+                    }
+                }
+            }
+
+            try
+            {
+                LoadClients();
+                LoadOrders();
+                LoadInventory();
+                
+                InitializeNewOrderButton();
+                InitializeComboBox();
+                InitializeInventoryButtons(); 
+            }
+            catch (SqliteException ex)
+            {
+                MessageBox.Show($"Ошибка базы данных: {ex.Message}\nПроверьте подключение и структуру базы данных.", 
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Неизвестная ошибка: {ex.Message}", 
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void InitializeInventoryButtons()
+        {
+            var inventoryTab = MainTabControl.Items[2] as TabItem; 
+            if (inventoryTab != null)
+            {
+                var inventoryGrid = inventoryTab.Content as Grid;
+                if (inventoryGrid != null && inventoryGrid.Children.Count > 0)
+                {
+                    var inventoryStackPanel = inventoryGrid.Children[0] as StackPanel;
+                    if (inventoryStackPanel != null && inventoryStackPanel.Children.Count > 1)
+                    {
+                        var addButton = inventoryStackPanel.Children[0] as Button;
+                        if (addButton != null)
+                        {
+                            addButton.Click += (sender, e) => 
+                            {
+                                var addInventoryWindow = new AddInventoryWindow();
+                                if (addInventoryWindow.ShowDialog() == true)
+                                {
+                                    LoadInventory();
+                                }
+                            };
+                        }
+
+                        var deleteButton = inventoryStackPanel.Children[1] as Button;
+                        if (deleteButton != null)
+                        {
+                            deleteButton.Click += (sender, e) => 
+                            {
+                                var inventoryDataGrid = FindDataGridInTab("Склад");
+                                if (inventoryDataGrid != null && inventoryDataGrid.SelectedItem != null)
+                                {
+                                    var selectedItem = inventoryDataGrid.SelectedItem as InventoryItem;
+                                    if (MessageBox.Show($"Удалить запись '{selectedItem.Name}'?", 
+                                        "Подтверждение", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                                    {
+                                        DeleteInventoryItem(selectedItem.Article);
+                                        LoadInventory();
+                                    }
+                                }
+                                else
+                                {
+                                    MessageBox.Show("Выберите запись для удаления", 
+                                        "Ошибка", MessageBoxButton.OK, MessageBoxImage.Warning);
+                                }
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        private void DeleteInventoryItem(string article)
+        {
+            try
+            {
+                using (var connection = new SqliteConnection(connectionString))
+                {
+                    connection.Open();
+                    var command = connection.CreateCommand();
+                    command.CommandText = "DELETE FROM SpareParts WHERE Articul = @article";
+                    command.Parameters.AddWithValue("@article", article);
+                    command.ExecuteNonQuery();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при удалении: {ex.Message}", 
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void InitializeComboBox()
+        {
+            var ordersTab = MainTabControl.Items[1] as TabItem;
+            if (ordersTab != null)
+            {
+                var ordersGrid = ordersTab.Content as Grid;
+                if (ordersGrid != null && ordersGrid.Children.Count > 0)
+                {
+                    var ordersStackPanel = ordersGrid.Children[0] as StackPanel;
+                    if (ordersStackPanel != null && ordersStackPanel.Children.Count > 0)
+                    {
+                        var statusComboBox = ordersStackPanel.Children[0] as ComboBox;
+                        if (statusComboBox != null)
+                        {
+                            statusComboBox.SelectionChanged += StatusComboBox_SelectionChanged;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void StatusComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            var comboBox = sender as ComboBox;
+            if (comboBox != null)
+            {
+                FilterOrdersByStatus(comboBox.SelectedIndex);
+            }
+        }
+
+        private void FilterOrdersByStatus(int statusIndex)
+        {
+            var allOrders = GetOrdersFromDatabase();
+            var filteredOrders = new List<Order>();
+
+            switch (statusIndex)
+            {
+                case 0: filteredOrders = allOrders; break;
+                case 1: filteredOrders = allOrders.Where(o => o.Status == "Принят").ToList(); break;
+                case 2: filteredOrders = allOrders.Where(o => o.Status == "В работе").ToList(); break;
+                case 3: filteredOrders = allOrders.Where(o => o.Status == "Готов").ToList(); break;
+                case 4: filteredOrders = allOrders.Where(o => o.Status == "Выдан").ToList(); break;
+                default: filteredOrders = allOrders; break;
+            }
+
+            var ordersDataGrid = FindDataGridInTab("Заказы");
+            if (ordersDataGrid != null)
+            {
+                ordersDataGrid.ItemsSource = filteredOrders;
+            }
+        }
+
+        private List<Order> GetOrdersFromDatabase()
+        {
+            var orders = new List<Order>();
+            
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = @"
+                    SELECT 
+                        so.Id, 
+                        COALESCE(c.FullName, '') as client_name,
+                        COALESCE(car.Brand || ' ' || car.Model || ' (' || car.Year || ')', '') as car, 
+                        COALESCE(so.Status, '') as status, 
+                        COALESCE(so.TotalCost, 0) as total_amount, 
+                        COALESCE(so.CreatedAt, '') as created_at
+                    FROM ServiceOrders so
+                    LEFT JOIN Clients c ON so.ClientId = c.Id
+                    LEFT JOIN Cars car ON so.CarVin = car.Vin";
+                
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        orders.Add(new Order
+                        {
+                            Id = reader.IsDBNull(0) ? 0 : reader.GetInt32(0),
+                            ClientName = reader.IsDBNull(1) ? "Не указан" : reader.GetString(1),
+                            Car = reader.IsDBNull(2) ? "Не указан" : reader.GetString(2),
+                            Status = reader.IsDBNull(3) ? "Не указан" : reader.GetString(3),
+                            Total = reader.IsDBNull(4) ? 0 : reader.GetDecimal(4),
+                            Date = reader.IsDBNull(5) ? "Не указана" : reader.GetDateTime(5).ToString("dd.MM.yyyy")
+                        });
+                    }
+                }
+            }
+            
+            return orders;
+        }
+
+        private void InitializeSearchFunctionality()
+        {
+            var clientsTab = MainTabControl.Items[0] as TabItem;
+            if (clientsTab != null)
+            {
+                var clientsGrid = clientsTab.Content as Grid;
+                if (clientsGrid != null && clientsGrid.Children.Count > 0)
+                {
+                    var clientsStackPanel = clientsGrid.Children[0] as StackPanel;
+                    if (clientsStackPanel != null && clientsStackPanel.Children.Count > 2) 
+                    {
+                        var searchTextBox = clientsStackPanel.Children[0] as TextBox;
+                        var searchButton = clientsStackPanel.Children[1] as Button;
+                        var addClientButton = clientsStackPanel.Children[2] as Button;
+
+                        if (searchTextBox != null && searchButton != null)
+                        {
+                            searchButton.Click += (sender, e) => SearchClients(searchTextBox.Text);
+                            searchTextBox.KeyDown += (sender, e) => 
+                            {
+                                if (e.Key == Key.Enter) SearchClients(searchTextBox.Text);
+                            };
+                            searchTextBox.TextChanged += (sender, e) => 
+                            {
+                                if (searchTextBox.Text.Length > 2 || searchTextBox.Text.Length == 0)
+                                    SearchClients(searchTextBox.Text);
+                            };
+                        }
+
+                        if (addClientButton != null)
+                        {
+                            addClientButton.Click += (sender, e) => 
+                            {
+                                var addClientWindow = new AddClientWindow();
+                                if (addClientWindow.ShowDialog() == true)
+                                {
+                                    LoadClients(); 
+                                }
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        private void SearchClients(string searchText)
+        {
+            var clients = new List<Client>();
+            
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                
+                if (string.IsNullOrWhiteSpace(searchText))
+                {
+                    command.CommandText = @"
+                        SELECT 
+                            COALESCE(FullName, '') as FullName, 
+                            COALESCE(Phone, '') as Phone, 
+                            COALESCE(Email, '') as Email, 
+                            (SELECT COUNT(*) FROM Cars WHERE ClientId = Clients.Id) as car_count 
+                        FROM Clients";
+                }
+                else
+                {
+                    command.CommandText = @"
+                        SELECT 
+                            COALESCE(FullName, '') as FullName, 
+                            COALESCE(Phone, '') as Phone, 
+                            COALESCE(Email, '') as Email, 
+                            (SELECT COUNT(*) FROM Cars WHERE ClientId = Clients.Id) as car_count 
+                        FROM Clients
+                        WHERE FullName LIKE @search OR Phone LIKE @search OR Email LIKE @search";
+                    command.Parameters.AddWithValue("@search", $"%{searchText}%");
+                }
+                
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        clients.Add(new Client
+                        {
+                            FullName = reader.IsDBNull(0) ? "Не указано" : reader.GetString(0),
+                            Phone = reader.IsDBNull(1) ? "Не указан" : reader.GetString(1),
+                            Email = reader.IsDBNull(2) ? "Не указан" : reader.GetString(2),
+                            CarCount = reader.IsDBNull(3) ? 0 : reader.GetInt32(3)
+                        });
+                    }
+                }
+            }
+
+            var clientsDataGrid = FindDataGridInTab("Клиенты");
+            if (clientsDataGrid != null)
+            {
+                clientsDataGrid.ItemsSource = clients;
+            }
+        }
+
+        private void InitializeNewOrderButton()
+        {
+            var ordersTab = MainTabControl.Items[1] as TabItem;
+            if (ordersTab != null)
+            {
+                var ordersGrid = ordersTab.Content as Grid;
+                if (ordersGrid != null && ordersGrid.Children.Count > 0)
+                {
+                    var ordersStackPanel = ordersGrid.Children[0] as StackPanel;
+                    if (ordersStackPanel != null && ordersStackPanel.Children.Count > 1)
+                    {
+                        var newOrderButton = ordersStackPanel.Children[1] as Button;
+                        if (newOrderButton != null)
+                        {
+                            newOrderButton.Click += (sender, e) => 
+                            {
+                                var newOrderWindow = new NewOrderWindow();
+                                if (newOrderWindow.ShowDialog() == true)
+                                {
+                                    LoadOrders();
+                                }
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        private void LoadClients()
+        {
+            var clients = new List<Client>();
+            
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = @"
+                    SELECT 
+                        COALESCE(FullName, '') as FullName, 
+                        COALESCE(Phone, '') as Phone, 
+                        COALESCE(Email, '') as Email, 
+                        (SELECT COUNT(*) FROM Cars WHERE ClientId = Clients.Id) as car_count 
+                    FROM Clients";
+                
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        clients.Add(new Client
+                        {
+                            FullName = reader.IsDBNull(0) ? "Не указано" : reader.GetString(0),
+                            Phone = reader.IsDBNull(1) ? "Не указан" : reader.GetString(1),
+                            Email = reader.IsDBNull(2) ? "Не указан" : reader.GetString(2),
+                            CarCount = reader.IsDBNull(3) ? 0 : reader.GetInt32(3)
+                        });
+                    }
+                }
+            }
+
+            var clientsDataGrid = FindDataGridInTab("Клиенты");
+            if (clientsDataGrid != null)
+            {
+                clientsDataGrid.ItemsSource = clients;
+            }
+        }
+
+        private void LoadOrders()
+        {
+            var orders = GetOrdersFromDatabase();
+            var ordersDataGrid = FindDataGridInTab("Заказы");
+            if (ordersDataGrid != null)
+            {
+                ordersDataGrid.ItemsSource = orders;
+            }
+        }
+
+        private void LoadInventory()
+        {
+            var inventory = new List<InventoryItem>();
+            
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = @"
+                    SELECT 
+                        COALESCE(Articul, '') as Articul, 
+                        COALESCE(Name, '') as Name, 
+                        COALESCE(Quantity, 0) as Quantity, 
+                        COALESCE(Price, 0) as Price 
+                    FROM SpareParts";
+                
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        inventory.Add(new InventoryItem
+                        {
+                            Article = reader.IsDBNull(0) ? "Не указан" : reader.GetString(0),
+                            Name = reader.IsDBNull(1) ? "Не указано" : reader.GetString(1),
+                            Quantity = reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
+                            Price = reader.IsDBNull(3) ? 0 : reader.GetDecimal(3)
+                        });
+                    }
+                }
+            }
+
+            var inventoryDataGrid = FindDataGridInTab("Склад");
+            if (inventoryDataGrid != null)
+            {
+                inventoryDataGrid.ItemsSource = inventory;
+            }
+        }
+
+        private void GenerateReport_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                DateTime startDate = StartDatePicker.SelectedDate ?? DateTime.Today.AddMonths(-1);
+                DateTime endDate = EndDatePicker.SelectedDate ?? DateTime.Today.AddDays(1);
+
+                decimal acceptedTotal = 0;
+                decimal inProgressTotal = 0;
+                decimal readyTotal = 0;
+                decimal completedTotal = 0;
+                
+                using (var connection = new SqliteConnection(connectionString))
+                {
+                    connection.Open();
+                    
+                    var command = connection.CreateCommand();
+                    command.CommandText = "SELECT SUM(TotalCost) FROM ServiceOrders WHERE Status = 'Принят' AND CreatedAt BETWEEN @start AND @end";
+                    command.Parameters.AddWithValue("@start", startDate);
+                    command.Parameters.AddWithValue("@end", endDate);
+                    var result = command.ExecuteScalar();
+                    acceptedTotal = result != DBNull.Value ? Convert.ToDecimal(result) : 0;
+                    
+                    command.CommandText = "SELECT SUM(TotalCost) FROM ServiceOrders WHERE Status = 'В работе' AND CreatedAt BETWEEN @start AND @end";
+                    result = command.ExecuteScalar();
+                    inProgressTotal = result != DBNull.Value ? Convert.ToDecimal(result) : 0;
+                    
+                    command.CommandText = "SELECT SUM(TotalCost) FROM ServiceOrders WHERE Status = 'Готов' AND CreatedAt BETWEEN @start AND @end";
+                    result = command.ExecuteScalar();
+                    readyTotal = result != DBNull.Value ? Convert.ToDecimal(result) : 0;
+                    
+                   
+                    command.CommandText = "SELECT SUM(TotalCost) FROM ServiceOrders WHERE Status = 'Выдан' AND CreatedAt BETWEEN @start AND @end";
+                    result = command.ExecuteScalar();
+                    completedTotal = result != DBNull.Value ? Convert.ToDecimal(result) : 0;
+                }
+                
+                var inventoryItems = new List<KeyValuePair<string, int>>();
+                using (var connection = new SqliteConnection(connectionString))
+                {
+                    connection.Open();
+                    var command = connection.CreateCommand();
+                    command.CommandText = "SELECT Name, Quantity FROM SpareParts ORDER BY Quantity DESC LIMIT 10";
+                    
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            inventoryItems.Add(new KeyValuePair<string, int>(
+                                reader.GetString(0), 
+                                reader.GetInt32(1)));
+                        }
+                    }
+                }
+                
+                // Обновляем ViewModel с новыми данными
+                reportsVM.UpdateOrdersData(acceptedTotal, inProgressTotal, readyTotal, completedTotal);
+                reportsVM.UpdateInventoryData(inventoryItems);
+                
+                // Обновляем DataContext для диаграмм
+                OrdersPieChart.DataContext = reportsVM;
+                InventoryChart.DataContext = reportsVM;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка при формировании отчета: {ex.Message}", 
+                    "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+private List<Order> GetOrdersForReport(DateTime? startDate, DateTime? endDate)
+{
+    var orders = new List<Order>();
+    
+    using (var connection = new SqliteConnection(connectionString))
+    {
+        connection.Open();
+        var command = connection.CreateCommand();
+        
+        string query = "SELECT * FROM ServiceOrders WHERE 1=1";
+        
+        if (startDate.HasValue)
+        {
+            query += " AND CreatedAt >= @startDate";
+            command.Parameters.AddWithValue("@startDate", startDate.Value);
+        }
+        
+        if (endDate.HasValue)
+        {
+            query += " AND CreatedAt <= @endDate";
+            command.Parameters.AddWithValue("@endDate", endDate.Value.AddDays(1));
+        }
+        
+        command.CommandText = query;
+        
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                orders.Add(new Order
+                {
+                    Id = reader.GetInt32(0),
+                    Status = reader.GetString(3),
+                    Total = reader.GetDecimal(4),
+                });
+            }
+        }
+    }
+    
+    return orders;
+}
+
+private List<InventoryItem> GetInventoryFromDatabase()
+{
+    var inventory = new List<InventoryItem>();
+    
+    using (var connection = new SqliteConnection(connectionString))
+    {
+        connection.Open();
+        var command = connection.CreateCommand();
+        command.CommandText = "SELECT Name, Quantity FROM SpareParts";
+        
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                inventory.Add(new InventoryItem
+                {
+                    Name = reader.GetString(0),
+                    Quantity = reader.GetInt32(1)
+                });
+            }
+        }
+    }
+    
+    return inventory;
+}
+        
+        private DataGrid FindDataGridInTab(string tabHeader)
+        {
+            foreach (TabItem tab in MainTabControl.Items)
+            {
+                if (tab.Header.ToString() == tabHeader)
+                {
+                    var grid = tab.Content as Grid;
+                    if (grid != null)
+                    {
+                        foreach (var child in grid.Children)
+                        {
+                            if (child is DataGrid dataGrid)
+                            {
+                                return dataGrid;
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+    }
+}
