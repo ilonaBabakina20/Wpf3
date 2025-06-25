@@ -1,0 +1,171 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Globalization;
+using System.Windows.Media;
+using LiveCharts;
+using LiveCharts.Wpf;
+
+namespace WpfApp3
+{
+    public class ReportsViewModel : INotifyPropertyChanged
+    {
+        private ChartValues<decimal> _acceptedValues = new ChartValues<decimal>();
+        private ChartValues<decimal> _inProgressValues = new ChartValues<decimal>();
+        private ChartValues<decimal> _readyValues = new ChartValues<decimal>();
+        private ChartValues<decimal> _completedValues = new ChartValues<decimal>();
+        private ChartValues<int> _inventoryValues = new ChartValues<int>();
+        private List<string> _inventoryLabels = new List<string>();
+        private Func<ChartPoint, string> _pointLabel;
+
+        public ReportsViewModel()
+        {
+            PointLabel = chartPoint => 
+            {
+                if (chartPoint.Y == 0) return "0";
+                return ((decimal)chartPoint.Y).ToString("N0", new CultureInfo("ru-RU"));
+            };
+        }
+
+        public ChartValues<decimal> AcceptedValues
+        {
+            get => _acceptedValues;
+            set
+            {
+                _acceptedValues = value;
+                OnPropertyChanged(nameof(AcceptedValues));
+            }
+        }
+
+        public ChartValues<decimal> InProgressValues
+        {
+            get => _inProgressValues;
+            set
+            {
+                _inProgressValues = value;
+                OnPropertyChanged(nameof(InProgressValues));
+            }
+        }
+
+        public ChartValues<decimal> ReadyValues
+        {
+            get => _readyValues;
+            set
+            {
+                _readyValues = value;
+                OnPropertyChanged(nameof(ReadyValues));
+            }
+        }
+
+        public ChartValues<decimal> CompletedValues
+        {
+            get => _completedValues;
+            set
+            {
+                _completedValues = value;
+                OnPropertyChanged(nameof(CompletedValues));
+            }
+        }
+
+        public ChartValues<int> InventoryValues
+        {
+            get => _inventoryValues;
+            set
+            {
+                _inventoryValues = value;
+                OnPropertyChanged(nameof(InventoryValues));
+            }
+        }
+
+        public List<string> InventoryLabels
+        {
+            get => _inventoryLabels;
+            set
+            {
+                _inventoryLabels = value;
+                OnPropertyChanged(nameof(InventoryLabels));
+            }
+        }
+
+        public Func<ChartPoint, string> PointLabel
+        {
+            get => _pointLabel;
+            set
+            {
+                _pointLabel = value;
+                OnPropertyChanged(nameof(PointLabel));
+            }
+        }
+
+        public void UpdateOrdersData(decimal accepted, decimal inProgress, decimal ready, decimal completed)
+        {
+            AcceptedValues.Clear();
+            InProgressValues.Clear();
+            ReadyValues.Clear();
+            CompletedValues.Clear();
+            
+            AcceptedValues.Add(accepted);
+            InProgressValues.Add(inProgress);
+            ReadyValues.Add(ready);
+            CompletedValues.Add(completed);
+        }
+
+        public void UpdateInventoryData(List<KeyValuePair<string, int>> items)
+        {
+            InventoryValues.Clear();
+            InventoryLabels.Clear();
+            
+            foreach (var item in items)
+            {
+                InventoryValues.Add(item.Value);
+                InventoryLabels.Add(item.Key);
+            }
+        }
+
+        public event PropertyChangedEventHandler PropertyChanged;
+
+        protected virtual void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        public SeriesCollection GetOrderSeriesCollection()
+        {
+            return new SeriesCollection
+            {
+                new PieSeries
+                {
+                    Title = "Принят",
+                    Values = AcceptedValues,
+                    DataLabels = true,
+                    LabelPoint = PointLabel,
+                    Fill = Brushes.SteelBlue
+                },
+                new PieSeries
+                {
+                    Title = "В работе",
+                    Values = InProgressValues,
+                    DataLabels = true,
+                    LabelPoint = PointLabel,
+                    Fill = Brushes.Red
+                },
+                new PieSeries
+                {
+                    Title = "Готов",
+                    Values = ReadyValues,
+                    DataLabels = true,
+                    LabelPoint = PointLabel,
+                    Fill = Brushes.Yellow
+                },
+                new PieSeries
+                {
+                    Title = "Выдан",
+                    Values = CompletedValues,
+                    DataLabels = true,
+                    LabelPoint = PointLabel,
+                    Fill = Brushes.Gray
+                }
+            };
+        }
+    }
+}
