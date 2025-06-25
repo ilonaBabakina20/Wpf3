@@ -1,0 +1,214 @@
+using System;
+using System.Windows;
+using Microsoft.Data.Sqlite;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Windows.Controls;
+
+namespace WpfApp3
+{
+    public partial class NewOrderWindow : Window
+    {
+        private string connectionString = "Data Source=new.db;";
+        private DateTime _currentDate;
+
+        public DateTime CurrentDate
+        {
+            get { return _currentDate; }
+            set { _currentDate = value; }
+        }
+
+        public NewOrderWindow()
+        {
+            InitializeComponent();
+            _currentDate = DateTime.Now;
+            DataContext = this;
+            
+            InitializeStatusComboBox();
+            
+            OrderNumberTextBox.Text = GenerateOrderNumber();
+            
+            LoadClients();
+            LoadCars();
+            IdTextBox.Text = GetNextOrderId().ToString();
+        }
+
+        private void InitializeStatusComboBox()
+        {
+            StatusComboBox.Items.Clear();
+            StatusComboBox.Items.Add(new ComboBoxItem { Content = "Принят" });
+            StatusComboBox.Items.Add(new ComboBoxItem { Content = "В работе" });
+            StatusComboBox.Items.Add(new ComboBoxItem { Content = "Готов" });
+            StatusComboBox.Items.Add(new ComboBoxItem { Content = "Выдан" });
+            StatusComboBox.SelectedIndex = 0; 
+        }
+
+        private string GenerateOrderNumber()
+        {
+            return $"ORD-{DateTime.Now:yyyyMMdd-HHmmss}";
+        }
+
+        private int GetNextOrderId()
+        {
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = "SELECT MAX(Id) FROM ServiceOrders";
+                var result = command.ExecuteScalar();
+                return result == DBNull.Value ? 1 : Convert.ToInt32(result) + 1;
+            }
+        }
+
+        private void LoadClients()
+        {
+            var clients = new List<string>();
+            
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = "SELECT FullName FROM Clients";
+                
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (!reader.IsDBNull(0))
+                        {
+                            clients.Add(reader.GetString(0));
+                        }
+                    }
+                }
+            }
+
+            ClientComboBox.ItemsSource = clients;
+            if (clients.Count > 0)
+            {
+                ClientComboBox.SelectedIndex = 0;
+            }
+        }
+
+        private void LoadCars()
+        {
+            var cars = new List<string>();
+            
+            using (var connection = new SqliteConnection(connectionString))
+            {
+                connection.Open();
+                var command = connection.CreateCommand();
+                command.CommandText = "SELECT Brand || ' ' || Model || ' (' || Year || ')' FROM Cars";
+                
+                using (var reader = command.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        if (!reader.IsDBNull(0))
+                        {
+                            cars.Add(reader.GetString(0));
+                        }
+                    }
+                }
+            }
+
+            CarComboBox.ItemsSource = cars;
+            if (cars.Count > 0)
+            {
+                CarComboBox.SelectedIndex = 0;
+            }
+        }
+
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            this.Close();
+        }
+
+        private void AddButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(OrderNumberTextBox.Text))
+            {
+                MessageBox.Show("Введите номер заказа", "Ошибка", 
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            string sumText = TotalTextBox.Text.Replace(",", ".");
+            if (!decimal.TryParse(sumText, NumberStyles.Any, CultureInfo.InvariantCulture, out decimal totalAmount) || totalAmount <= 0)
+            {
+                MessageBox.Show("Введите корректную сумму (например: 1500 или 1500.50)", "Ошибка", 
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+                return;
+            }
+
+            string status = (StatusComboBox.SelectedItem as ComboBoxItem)?.Content.ToString();
+
+            try
+            {
+                using (var connection = new SqliteConnection(connectionString))
+                {
+                    connection.Open();
+                    
+                    var checkCommand = connection.CreateCommand();
+                    checkCommand.CommandText = "SELECT COUNT(*) FROM ServiceOrders WHERE Ordernumber = @ordernumber";
+                    checkCommand.Parameters.AddWithValue("@ordernumber", OrderNumberTextBox.Text);
+                    int orderCount = Convert.ToInt32(checkCommand.ExecuteScalar());
+
+                    if (orderCount > 0)
+                    {
+                        MessageBox.Show("Заказ с таким номером уже существует", "Ошибка",
+                                      MessageBoxButton.OK, MessageBoxImage.Error);
+                        return;
+                    }
+
+                    var insertCommand = connection.CreateCommand();
+                    insertCommand.CommandText = @"
+                        INSERT INTO ServiceOrders (
+                            Id, 
+                            Ordernumber,
+                            ClientId, 
+                            CarVin, 
+                            Status, 
+                            TotalCost, 
+                            CreatedAt
+                        ) VALUES (
+                            @id, 
+                            @ordernumber,
+                            (SELECT Id FROM Clients WHERE FullName = @clientName),
+                            (SELECT Vin FROM Cars WHERE Brand || ' ' || Model || ' (' || Year || ')' = @car),
+                            @status, 
+                            @total, 
+                            @date
+                        )";
+                    
+                    insertCommand.Parameters.AddWithValue("@id", int.Parse(IdTextBox.Text));
+                    insertCommand.Parameters.AddWithValue("@ordernumber", OrderNumberTextBox.Text);
+                    insertCommand.Parameters.AddWithValue("@clientName", ClientComboBox.SelectedItem?.ToString() ?? "");
+                    insertCommand.Parameters.AddWithValue("@car", CarComboBox.SelectedItem?.ToString() ?? "");
+                    insertCommand.Parameters.AddWithValue("@status", status);
+                    insertCommand.Parameters.AddWithValue("@total", totalAmount);
+                    insertCommand.Parameters.AddWithValue("@date", CurrentDate.ToString("yyyy-MM-dd"));
+                    
+                    int rowsAffected = insertCommand.ExecuteNonQuery();
+
+                    if (rowsAffected > 0)
+                    {
+                        MessageBox.Show("Заказ успешно добавлен", "Успех", 
+                                      MessageBoxButton.OK, MessageBoxImage.Information);
+                        this.DialogResult = true;
+                        this.Close();
+                    }
+                }
+            }
+            catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+            {
+                MessageBox.Show("Ошибка в данных: проверьте корректность всех полей", "Ошибка",
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка: {ex.Message}", "Ошибка",
+                              MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+    }
+}
