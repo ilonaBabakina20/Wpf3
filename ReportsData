@@ -1,0 +1,83 @@
+using LiveCharts;
+using LiveCharts.Wpf;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace WpfApp3
+{
+    public class ReportsData
+    {
+        public SeriesCollection OrderSeries { get; set; }
+        public SeriesCollection InventorySeries { get; set; }
+        public List<string> InventoryLabels { get; set; }
+
+        public ReportsData()
+        {
+            OrderSeries = new SeriesCollection();
+            InventorySeries = new SeriesCollection();
+            InventoryLabels = new List<string>();
+        }
+
+        public void UpdateOrdersData(List<Order> orders)
+        {
+            OrderSeries.Clear();
+
+            var accepted = orders.Where(o => o.Status == "Принят").Sum(o => o.Total);
+            var inProgress = orders.Where(o => o.Status == "В работе").Sum(o => o.Total);
+            var ready = orders.Where(o => o.Status == "Готов").Sum(o => o.Total);
+            var completed = orders.Where(o => o.Status == "Выдан").Sum(o => o.Total);
+
+            OrderSeries.Add(new PieSeries
+            {
+                Title = "Принят",
+                Values = new ChartValues<decimal> { accepted },
+                DataLabels = true,
+                Fill = System.Windows.Media.Brushes.SteelBlue
+            });
+
+            OrderSeries.Add(new PieSeries
+            {
+                Title = "В работе",
+                Values = new ChartValues<decimal> { inProgress },
+                DataLabels = true,
+                Fill = System.Windows.Media.Brushes.Red
+            });
+
+            OrderSeries.Add(new PieSeries
+            {
+                Title = "Готов",
+                Values = new ChartValues<decimal> { ready },
+                DataLabels = true,
+                Fill = System.Windows.Media.Brushes.Yellow
+            });
+
+            OrderSeries.Add(new PieSeries
+            {
+                Title = "Выдан",
+                Values = new ChartValues<decimal> { completed },
+                DataLabels = true,
+                Fill = System.Windows.Media.Brushes.Gray
+            });
+        }
+
+        public void UpdateInventoryData(List<InventoryItem> inventory)
+        {
+            InventorySeries.Clear();
+            InventoryLabels.Clear();
+
+            var columnSeries = new ColumnSeries
+            {
+                Title = "Товары",
+                Values = new ChartValues<int>()
+            };
+
+            foreach (var item in inventory.Take(10)) 
+            {
+                columnSeries.Values.Add(item.Quantity);
+                InventoryLabels.Add(item.Name);
+            }
+
+            InventorySeries.Add(columnSeries);
+        }
+    }
+}
